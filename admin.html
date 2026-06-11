@@ -139,7 +139,7 @@
       </div>
       <div class="fld">
         <label>所屬公司</label>
-        <select id="fCompany" onchange="onCompanyChange()"></select>
+        <select id="fCompany"></select>
       </div>
       <div class="fld">
         <label>部門（選填）</label>
@@ -190,10 +190,9 @@
   <!-- 部門管理 -->
   <div class="panel" style="margin-top:20px">
     <h2>部門管理</h2>
-    <div class="sub">新增或刪除各公司的部門，建立異動資料時即可從下拉選用（即時同步給所有人資）</div>
+    <div class="sub">新增或刪除部門（三家公司通用），建立異動資料時即可從下拉選用（即時同步給所有人資）</div>
     <div class="filterbar" style="margin-bottom:14px">
-      <div class="fld"><label>公司</label><select id="dmCompany" onchange="renderDeptManager()"></select></div>
-      <div class="fld" style="flex:1;min-width:180px"><label>新增部門名稱</label>
+      <div class="fld" style="flex:1;min-width:200px"><label>新增部門名稱</label>
         <input type="text" id="dmName" placeholder="例：工務部" onkeydown="if(event.key==='Enter')addDept()"></div>
       <button class="btn solid" onclick="addDept()">新增部門</button>
     </div>
@@ -257,7 +256,7 @@ const DEPT_DOC=doc(db,"settings","departments");   // 部門清單（各公司�
 
 let ALL=[];          // 全部資料
 let editingId=null;  // 正在編輯的 doc id
-let DEPTS={};        // 部門：{ 公司: [部門,...] }
+let DEPTS=[];        // 部門清單（三家公司通用）
 
 /* ===== 即時推送到 Google Sheet（寫入成功後呼叫，失敗不影響存檔）===== */
 function syncToSheet(action, payload){
@@ -316,75 +315,60 @@ function subscribe(){
   });
 }
 
-/* ===== 部門清單即時讀取 ===== */
+/* ===== 部門清單即時讀取（三家公司通用）===== */
 let unsubDept=null;
 function subscribeDepts(){
   if(unsubDept) return;
   unsubDept=onSnapshot(DEPT_DOC,(snap)=>{
-    DEPTS = (snap.exists() && snap.data().byCompany) ? snap.data().byCompany : {};
-    onCompanyChange();          // 重新整理表單部門下拉
-    fillDeptFilter();           // 重新整理篩選部門下拉
+    DEPTS = (snap.exists() && Array.isArray(snap.data().list)) ? snap.data().list : [];
+    fillDeptDropdowns();        // 重新整理表單與篩選的部門下拉
     renderDeptManager();        // 重新整理部門管理清單
     renderList();
   });
 }
 
-// 取某公司的部門陣列（已排序去重）
-function deptsOf(company){ return (DEPTS[company]||[]).slice().sort(); }
+// 已排序的部門陣列
+function deptList(){ return DEPTS.slice().sort(); }
 
-// 表單：公司改變時，重填部門下拉
-window.onCompanyChange=function(){
-  const company=document.getElementById("fCompany").value;
-  const cur=document.getElementById("fDept").value;
-  const list=deptsOf(company);
-  document.getElementById("fDept").innerHTML=
-    `<option value="">（不指定）</option>`+list.map(d=>`<option>${esc(d)}</option>`).join("");
-  if(list.includes(cur)) document.getElementById("fDept").value=cur;   // 盡量保留原選擇
-};
-
-// 篩選：部門下拉（全部公司部門的聯集）
-function fillDeptFilter(){
-  const all=[...new Set(Object.values(DEPTS).flat())].sort();
-  const sel=document.getElementById("flDept"); const cur=sel.value;
-  sel.innerHTML=`<option value="">全部部門</option>`+all.map(d=>`<option>${esc(d)}</option>`).join("");
-  if(all.includes(cur)) sel.value=cur;
+// 填入表單(fDept)與篩選(flDept)的部門下拉，保留原選擇
+function fillDeptDropdowns(){
+  const list=deptList();
+  const f=document.getElementById("fDept"), fc=f.value;
+  f.innerHTML=`<option value="">（不指定）</option>`+list.map(d=>`<option>${esc(d)}</option>`).join("");
+  if(list.includes(fc)) f.value=fc;
+  const fl=document.getElementById("flDept"), lc=fl.value;
+  fl.innerHTML=`<option value="">全部部門</option>`+list.map(d=>`<option>${esc(d)}</option>`).join("");
+  if(list.includes(lc)) fl.value=lc;
 }
 
-/* ===== 部門管理 ===== */
+/* ===== 部門管理（通用清單）===== */
 window.addDept=async function(){
-  const company=document.getElementById("dmCompany").value;
   const name=document.getElementById("dmName").value.trim();
   const msg=document.getElementById("dmMsg"); msg.className="formmsg";
-  if(!company){ msg.className="formmsg bad"; msg.textContent="請先選擇公司"; return; }
   if(!name){ msg.className="formmsg bad"; msg.textContent="請輸入部門名稱"; return; }
-  const list=DEPTS[company]||[];
-  if(list.includes(name)){ msg.className="formmsg bad"; msg.textContent="此部門已存在"; return; }
-  const next={...DEPTS, [company]:[...list, name]};
+  if(DEPTS.includes(name)){ msg.className="formmsg bad"; msg.textContent="此部門已存在"; return; }
   try{
-    await setDoc(DEPT_DOC,{byCompany:next},{merge:true});
+    await setDoc(DEPT_DOC,{list:[...DEPTS, name]},{merge:true});
     document.getElementById("dmName").value="";
-    msg.className="formmsg ok"; msg.textContent=`已新增部門：${company} / ${name}`;
+    msg.className="formmsg ok"; msg.textContent=`已新增部門：${name}`;
     setTimeout(()=>{ msg.textContent=""; },2500);
   }catch(e){ msg.className="formmsg bad"; msg.textContent="新增失敗："+e.message; }
 };
 
-window.delDept=async function(company,name){
-  const used=ALL.filter(it=>it.company===company && it.dept===name).length;
-  const warn=used>0 ? `\n\n注意：已有 ${used} 筆異動使用此部門，刪除後那些紀錄的部門欄位仍會保留文字，但下拉將不再出現此選項。` : "";
-  if(!confirm(`確定刪除部門「${company} / ${name}」？${warn}`)) return;
-  const next={...DEPTS, [company]:(DEPTS[company]||[]).filter(d=>d!==name)};
-  try{ await setDoc(DEPT_DOC,{byCompany:next},{merge:true}); }
+window.delDept=async function(name){
+  const used=ALL.filter(it=>it.dept===name).length;
+  const warn=used>0 ? `\n\n注意：已有 ${used} 筆異動使用此部門，刪除後那些紀錄仍會保留文字，但下拉將不再出現此選項。` : "";
+  if(!confirm(`確定刪除部門「${name}」？${warn}`)) return;
+  try{ await setDoc(DEPT_DOC,{list:DEPTS.filter(d=>d!==name)},{merge:true}); }
   catch(e){ alert("刪除失敗："+e.message); }
 };
 
 function renderDeptManager(){
-  const company=document.getElementById("dmCompany").value;
   const box=document.getElementById("dmList");
-  if(!company){ box.innerHTML=`<div class="deptempty">請選擇公司以管理其部門</div>`; return; }
-  const list=deptsOf(company);
-  if(!list.length){ box.innerHTML=`<div class="deptempty">「${esc(company)}」目前沒有部門，於上方新增。</div>`; return; }
+  const list=deptList();
+  if(!list.length){ box.innerHTML=`<div class="deptempty">目前沒有部門，於上方新增。</div>`; return; }
   box.innerHTML=`<div class="deptchips">`+list.map(d=>
-    `<span class="deptchip">${esc(d)}<button title="刪除" onclick="delDept('${esc(company)}','${esc(d).replace(/'/g,"\\'")}')">×</button></span>`
+    `<span class="deptchip">${esc(d)}<button title="刪除" onclick="delDept('${esc(d).replace(/'/g,"\\'")}')">×</button></span>`
   ).join("")+`</div>`;
 }
 
@@ -425,7 +409,6 @@ window.editEntry=function(id){
   editingId=id;
   document.getElementById("fDate").value=it.date||"";
   document.getElementById("fCompany").value=it.company||"";
-  onCompanyChange();                                     // 依公司填入部門下拉
   document.getElementById("fDept").value=it.dept||"";
   document.getElementById("fStatus").value=it.status||"";
   document.getElementById("fName").value=it.name||"";
@@ -444,7 +427,7 @@ window.cancelEdit=function(){
   document.getElementById("cancelBtn").style.display="none";
   document.getElementById("fName").value="";
   document.getElementById("fNote").value="";
-  onCompanyChange();
+  document.getElementById("fDept").value="";
 };
 
 window.delEntry=async function(id){
@@ -505,8 +488,6 @@ function initSelects(){
     `<option value="">全部公司</option>`+COMPANIES.map(c=>`<option>${esc(c)}</option>`).join("");
   document.getElementById("flStatus").innerHTML=
     `<option value="">全部狀態</option>`+STATUS_LIST.map(s=>`<option>${esc(s.name)}</option>`).join("");
-  document.getElementById("dmCompany").innerHTML=
-    `<option value="">請選擇</option>`+COMPANIES.map(c=>`<option>${esc(c)}</option>`).join("");
   document.getElementById("fDept").innerHTML=`<option value="">（不指定）</option>`;
   document.getElementById("flDept").innerHTML=`<option value="">全部部門</option>`;
   document.getElementById("fDate").value=new Date().toISOString().slice(0,10);
