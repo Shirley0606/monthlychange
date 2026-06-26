@@ -17,6 +17,9 @@
     --s3-bg:#e8f1fd;--s3-fg:#1357b8;--s3-dot:#2a78e0;
     --s4-bg:#fdf2e0;--s4-fg:#9a6300;--s4-dot:#e0921a;
     --s5-bg:#f0eafc;--s5-fg:#6b34c4;--s5-dot:#8b4ae6;
+    --s6-bg:#def3f1;--s6-fg:#0c6b66;--s6-dot:#14a89f;
+    --s7-bg:#fdebf2;--s7-fg:#b4256e;--s7-dot:#e0518f;
+    --s8-bg:#eaecf6;--s8-fg:#3a3f8f;--s8-dot:#5a61c4;
     --s0-bg:#eef1f5;--s0-fg:#5b6677;--s0-dot:#94a3b8;
   }
   *{box-sizing:border-box;margin:0;padding:0}
@@ -91,6 +94,9 @@
     cursor:pointer;font-size:13px;line-height:1;display:grid;place-items:center;padding:0}
   .deptchip button:hover{background:#dc3a31;color:#fff}
   .deptempty{font-size:13px;color:var(--ink-soft);padding:6px 0}
+  .swatches{display:flex;gap:8px;flex-wrap:wrap}
+  .swatch{width:26px;height:26px;border-radius:8px;cursor:pointer;border:2px solid transparent;box-shadow:inset 0 0 0 1px rgba(0,0,0,.06)}
+  .swatch.on{border-color:var(--ink);box-shadow:inset 0 0 0 1px rgba(0,0,0,.06),0 0 0 2px #fff}
 
   footer{margin-top:24px;font-size:12.5px;color:var(--ink-soft);display:flex;gap:16px}
   footer a{color:var(--accent);text-decoration:none;font-weight:600}
@@ -200,6 +206,20 @@
     <div class="formmsg" id="dmMsg"></div>
   </div>
 
+  <!-- 狀態管理 -->
+  <div class="panel" style="margin-top:20px">
+    <h2>狀態管理</h2>
+    <div class="sub">新增或刪除異動狀態（如停繳6%、轉調…），可挑選顏色；前台月曆、圖例與統計會即時套用</div>
+    <div class="filterbar" style="margin-bottom:12px;align-items:flex-end">
+      <div class="fld" style="flex:1;min-width:180px"><label>新增狀態名稱</label>
+        <input type="text" id="smName" placeholder="例：留職停薪" onkeydown="if(event.key==='Enter')addStatus()"></div>
+      <div class="fld"><label>顏色</label><div class="swatches" id="smSwatches"></div></div>
+      <button class="btn solid" onclick="addStatus()">新增狀態</button>
+    </div>
+    <div id="smList"></div>
+    <div class="formmsg" id="smMsg"></div>
+  </div>
+
   <footer>
     <span>異動資料即時同步至前台看板</span>
     <a href="index.html">前台看板 →</a>
@@ -208,7 +228,7 @@
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged }
+import { getAuth, setPersistence, inMemoryPersistence, signInWithEmailAndPassword, signOut, onAuthStateChanged }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import { getFirestore, collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, setDoc, serverTimestamp }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
@@ -237,22 +257,28 @@ const COMPANIES = ["YL", "WH", "LT"];
 const SHEET_SYNC_URL = "";
 
 /* =========================================================
-   ③ 狀態設定 —— 與前台一致
+   ③ 狀態設定 —— 預設值；實際清單由後台「狀態管理」維護，存於 Firestore
    ========================================================= */
-const STATUS_LIST = [
-  { name:"新進",     v:"--s1" },
-  { name:"離職",     v:"--s2" },
-  { name:"自提6%",   v:"--s3" },
-  { name:"停繳6%",   v:"--s4" },
-  { name:"眷屬加保", v:"--s5" }
+const DEFAULT_STATUSES = [
+  { name:"新進",     color:"--s1" },
+  { name:"離職",     color:"--s2" },
+  { name:"自提6%",   color:"--s3" },
+  { name:"停繳6%",   color:"--s4" },
+  { name:"眷屬加保", color:"--s5" },
+  { name:"育嬰留停開始", color:"--s6" },
+  { name:"育嬰留停結束", color:"--s7" }
 ];
-const styleOf=(s)=>{const f=STATUS_LIST.find(x=>x.name===s);return f?f.v:"--s0";};
+// 可選顏色色盤（新增狀態時挑選）
+const PALETTE = ["--s1","--s2","--s3","--s4","--s5","--s6","--s7","--s8","--s0"];
+let STATUSES = DEFAULT_STATUSES.slice();
+const styleOf=(s)=>{const f=STATUSES.find(x=>x.name===s);return f?f.color:"--s0";};
 
 const app=initializeApp(firebaseConfig);
 const auth=getAuth(app);
 const db=getFirestore(app);
 const COL="personnel_changes";
 const DEPT_DOC=doc(db,"settings","departments");   // 部門清單（各公司）
+const STATUS_DOC=doc(db,"settings","statuses");    // 狀態清單（含顏色）
 
 let ALL=[];          // 全部資料
 let editingId=null;  // 正在編輯的 doc id
@@ -283,6 +309,7 @@ onAuthStateChanged(auth,(user)=>{
     document.getElementById("userEmail").textContent=user.email;
     subscribe();
     subscribeDepts();
+    subscribeStatuses();
   }else{
     document.getElementById("loginScreen").style.display="";
     document.getElementById("adminScreen").style.display="none";
@@ -294,7 +321,10 @@ window.doLogin=async function(){
   const pw=document.getElementById("loginPw").value;
   const err=document.getElementById("loginErr");
   err.textContent="";
-  try{ await signInWithEmailAndPassword(auth,email,pw); }
+  try{
+    await setPersistence(auth, inMemoryPersistence);   // 不保存登入狀態：每次開啟/重新整理都需重新登入
+    await signInWithEmailAndPassword(auth,email,pw);
+  }
   catch(e){ err.textContent=mapErr(e.code); }
 };
 window.doLogout=()=>signOut(auth);
@@ -369,6 +399,76 @@ function renderDeptManager(){
   if(!list.length){ box.innerHTML=`<div class="deptempty">目前沒有部門，於上方新增。</div>`; return; }
   box.innerHTML=`<div class="deptchips">`+list.map(d=>
     `<span class="deptchip">${esc(d)}<button title="刪除" onclick="delDept('${esc(d).replace(/'/g,"\\'")}')">×</button></span>`
+  ).join("")+`</div>`;
+}
+
+/* ===== 狀態清單即時讀取 ===== */
+let unsubStatus=null;
+function subscribeStatuses(){
+  if(unsubStatus) return;
+  unsubStatus=onSnapshot(STATUS_DOC,(snap)=>{
+    STATUSES = (snap.exists() && Array.isArray(snap.data().list) && snap.data().list.length)
+      ? snap.data().list : DEFAULT_STATUSES.slice();
+    fillStatusDropdowns();      // 重新整理表單與篩選的狀態下拉
+    renderStatusManager();      // 重新整理狀態管理清單
+    renderList();
+  });
+}
+
+// 填入表單(fStatus)與篩選(flStatus)的狀態下拉，保留原選擇
+function fillStatusDropdowns(){
+  const f=document.getElementById("fStatus"), fc=f.value;
+  f.innerHTML=`<option value="">請選擇</option>`+STATUSES.map(s=>`<option>${esc(s.name)}</option>`).join("");
+  if(STATUSES.some(s=>s.name===fc)) f.value=fc;
+  const fl=document.getElementById("flStatus"), lc=fl.value;
+  fl.innerHTML=`<option value="">全部狀態</option>`+STATUSES.map(s=>`<option>${esc(s.name)}</option>`).join("");
+  if(STATUSES.some(s=>s.name===lc)) fl.value=lc;
+}
+
+/* ===== 狀態管理 ===== */
+let pickColor=PALETTE[0];   // 新增狀態時選的顏色
+window.pickStatusColor=function(c){
+  pickColor=c;
+  document.querySelectorAll("#smSwatches .swatch").forEach(el=>
+    el.classList.toggle("on", el.dataset.c===c));
+};
+
+window.addStatus=async function(){
+  const name=document.getElementById("smName").value.trim();
+  const msg=document.getElementById("smMsg"); msg.className="formmsg";
+  if(!name){ msg.className="formmsg bad"; msg.textContent="請輸入狀態名稱"; return; }
+  if(STATUSES.some(s=>s.name===name)){ msg.className="formmsg bad"; msg.textContent="此狀態已存在"; return; }
+  try{
+    await setDoc(STATUS_DOC,{list:[...STATUSES,{name,color:pickColor}]},{merge:true});
+    document.getElementById("smName").value="";
+    msg.className="formmsg ok"; msg.textContent=`已新增狀態：${name}`;
+    setTimeout(()=>{ msg.textContent=""; },2500);
+  }catch(e){ msg.className="formmsg bad"; msg.textContent="新增失敗："+e.message; }
+};
+
+window.delStatus=async function(name){
+  const used=ALL.filter(it=>it.status===name).length;
+  const warn=used>0 ? `\n\n注意：已有 ${used} 筆異動使用此狀態，刪除後那些紀錄仍會保留文字，但下拉與圖例將不再出現此狀態。` : "";
+  if(!confirm(`確定刪除狀態「${name}」？${warn}`)) return;
+  try{ await setDoc(STATUS_DOC,{list:STATUSES.filter(s=>s.name!==name)},{merge:true}); }
+  catch(e){ alert("刪除失敗："+e.message); }
+};
+
+function renderStatusManager(){
+  // 色盤
+  const sw=document.getElementById("smSwatches");
+  if(sw && !sw.dataset.built){
+    sw.innerHTML=PALETTE.map(c=>
+      `<span class="swatch${c===pickColor?' on':''}" data-c="${c}" style="background:var(${c}-dot)" onclick="pickStatusColor('${c}')"></span>`).join("");
+    sw.dataset.built="1";
+  }
+  // 清單
+  const box=document.getElementById("smList");
+  if(!STATUSES.length){ box.innerHTML=`<div class="deptempty">目前沒有狀態，於上方新增。</div>`; return; }
+  box.innerHTML=`<div class="deptchips">`+STATUSES.map(s=>
+    `<span class="deptchip" style="background:var(${s.color}-bg);color:var(${s.color}-fg);border-color:var(${s.color}-bg)">
+      <span class="d" style="width:9px;height:9px;border-radius:50%;background:var(${s.color}-dot)"></span>${esc(s.name)}
+      <button title="刪除" onclick="delStatus('${esc(s.name).replace(/'/g,"\\'")}')">×</button></span>`
   ).join("")+`</div>`;
 }
 
@@ -483,11 +583,11 @@ function initSelects(){
   document.getElementById("fCompany").innerHTML=
     `<option value="">請選擇</option>`+COMPANIES.map(c=>`<option>${esc(c)}</option>`).join("");
   document.getElementById("fStatus").innerHTML=
-    `<option value="">請選擇</option>`+STATUS_LIST.map(s=>`<option>${esc(s.name)}</option>`).join("");
+    `<option value="">請選擇</option>`+STATUSES.map(s=>`<option>${esc(s.name)}</option>`).join("");
   document.getElementById("flCompany").innerHTML=
     `<option value="">全部公司</option>`+COMPANIES.map(c=>`<option>${esc(c)}</option>`).join("");
   document.getElementById("flStatus").innerHTML=
-    `<option value="">全部狀態</option>`+STATUS_LIST.map(s=>`<option>${esc(s.name)}</option>`).join("");
+    `<option value="">全部狀態</option>`+STATUSES.map(s=>`<option>${esc(s.name)}</option>`).join("");
   document.getElementById("fDept").innerHTML=`<option value="">（不指定）</option>`;
   document.getElementById("flDept").innerHTML=`<option value="">全部部門</option>`;
   document.getElementById("fDate").value=new Date().toISOString().slice(0,10);
