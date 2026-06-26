@@ -19,6 +19,9 @@
     --s3-bg:#e8f1fd; --s3-fg:#1357b8; --s3-dot:#2a78e0;   /* 自提6% */
     --s4-bg:#fdf2e0; --s4-fg:#9a6300; --s4-dot:#e0921a;   /* 停繳6% */
     --s5-bg:#f0eafc; --s5-fg:#6b34c4; --s5-dot:#8b4ae6;   /* 眷屬加保 */
+    --s6-bg:#def3f1; --s6-fg:#0c6b66; --s6-dot:#14a89f;
+    --s7-bg:#fdebf2; --s7-fg:#b4256e; --s7-dot:#e0518f;
+    --s8-bg:#eaecf6; --s8-fg:#3a3f8f; --s8-dot:#5a61c4;
     --s0-bg:#eef1f5; --s0-fg:#5b6677; --s0-dot:#94a3b8;   /* 其他 */
   }
   *{box-sizing:border-box;margin:0;padding:0}
@@ -194,7 +197,7 @@
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, collection, onSnapshot }
+import { getFirestore, collection, onSnapshot, doc }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 /* =========================================================
@@ -210,16 +213,19 @@ const firebaseConfig = {
 };
 
 /* =========================================================
-   ② 狀態設定 —— 要新增狀態，在這裡加一筆即可（前後台共用）
+   ② 狀態設定 —— 預設值；實際清單由後台「狀態管理」維護，前台即時讀取
    ========================================================= */
-const STATUS_LIST = [
-  { name:"新進",     v:"--s1" },
-  { name:"離職",     v:"--s2" },
-  { name:"自提6%",   v:"--s3" },
-  { name:"停繳6%",   v:"--s4" },
-  { name:"眷屬加保", v:"--s5" }
+const DEFAULT_STATUSES = [
+  { name:"新進",     color:"--s1" },
+  { name:"離職",     color:"--s2" },
+  { name:"自提6%",   color:"--s3" },
+  { name:"停繳6%",   color:"--s4" },
+  { name:"眷屬加保", color:"--s5" },
+  { name:"育嬰留停開始", color:"--s6" },
+  { name:"育嬰留停結束", color:"--s7" }
 ];
-const styleOf = (s)=>{ const f=STATUS_LIST.find(x=>x.name===s); return f?f.v:"--s0"; };
+let STATUSES = DEFAULT_STATUSES.slice();
+const styleOf = (s)=>{ const f=STATUSES.find(x=>x.name===s); return f?f.color:"--s0"; };
 
 /* ===== 初始化 ===== */
 const app = initializeApp(firebaseConfig);
@@ -228,6 +234,15 @@ const db  = getFirestore(app);
 let ALL = [];               // 全部異動資料
 let cur = new Date();       // 目前月曆所在月份
 cur.setDate(1);
+
+/* ===== 狀態清單即時讀取 ===== */
+onSnapshot(doc(db, "settings", "statuses"), (snap)=>{
+  STATUSES = (snap.exists() && Array.isArray(snap.data().list) && snap.data().list.length)
+    ? snap.data().list : DEFAULT_STATUSES.slice();
+  buildLegend();
+  renderCalendar();
+  if(document.getElementById("viewQuery").style.display!=="none") runQuery();
+}, ()=>{});
 
 /* ===== 即時讀取 ===== */
 onSnapshot(collection(db, "personnel_changes"), (snap)=>{
@@ -284,10 +299,10 @@ function renderCalendar(){
 
 /* ===== 圖例 / 狀態選擇 ===== */
 function buildLegend(){
-  document.getElementById("legend").innerHTML = STATUS_LIST.map(s=>
-    `<span class="lg"><span class="dot" style="background:var(${s.v}-dot)"></span>${s.name}</span>`).join("");
-  document.getElementById("qStatus").innerHTML = STATUS_LIST.map(s=>
-    `<label data-s="${s.name}"><input type="checkbox" value="${s.name}"><span class="d" style="background:var(${s.v}-dot)"></span>${s.name}</label>`).join("");
+  document.getElementById("legend").innerHTML = STATUSES.map(s=>
+    `<span class="lg"><span class="dot" style="background:var(${s.color}-dot)"></span>${esc(s.name)}</span>`).join("");
+  document.getElementById("qStatus").innerHTML = STATUSES.map(s=>
+    `<label data-s="${esc(s.name)}"><input type="checkbox" value="${esc(s.name)}"><span class="d" style="background:var(${s.color}-dot)"></span>${esc(s.name)}</label>`).join("");
   document.querySelectorAll("#qStatus label").forEach(l=>{
     l.addEventListener("click",()=> setTimeout(()=> l.classList.toggle("on", l.querySelector("input").checked),0));
   });
